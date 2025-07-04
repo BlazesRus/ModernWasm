@@ -115,9 +115,7 @@ export class ModernWasmExecutor {
           debugLog(`📦 Available exports: ${exportNames.join(', ')}`);
 
           // Also log global exports that might be from Crystalline
-          const globalExports = Object.keys(globalThis).filter(key => 
-          typeof (globalThis as any)[key] === 'function' &&
-          !['setTimeout', 'setInterval', 'fetch', 'alert', 'confirm', 'prompt'].includes(key));
+          const globalExports = Object.keys(globalThis).filter(key => typeof (globalThis as any)[key] === 'function' && !['setTimeout', 'setInterval', 'fetch', 'alert', 'confirm', 'prompt'].includes(key));
           debugLog(`🌐 Global function exports: ${globalExports.slice(0, 10).join(', ')}`);
 
           this.updateProgress(100, '✅ WASM loaded successfully with modern TypeScript runtime!');

@@ -1,6 +1,6 @@
 /**
  * Worker-compatible Modern TypeScript Go WASM Runtime
- * 
+ *
  * This is a worker-safe version of go-runtime.svelte.ts that doesn't use SvelteKit imports.
  * Used in web workers where $app/environment is not available.
  */
@@ -36,10 +36,10 @@ const goRuntimeState = {
  */
 function debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
   if (!goRuntimeState.debugEnabled) return;
-  
+
   const timestamp = new Date().toISOString();
   const logMessage = `[Go WASM Worker ${timestamp}] ${message}`;
-  
+
   switch (level) {
     case 'warn':
       console.warn(logMessage);
@@ -66,10 +66,12 @@ function createBrowserFS() {
   return {
     constants,
     writeSync(fd: number, buffer: Uint8Array): number {
-      if (fd === 1) { // stdout
+      if (fd === 1) {
+        // stdout
         const decoder = new TextDecoder();
         console.log(decoder.decode(buffer));
-      } else if (fd === 2) { // stderr
+      } else if (fd === 2) {
+        // stderr
         const decoder = new TextDecoder();
         console.error(decoder.decode(buffer));
       } else {
@@ -88,29 +90,75 @@ function createBrowserFS() {
         callback(err);
       }
     },
-    chmod() { throw new Error('Not implemented'); },
-    chown() { throw new Error('Not implemented'); },
-    close() { throw new Error('Not implemented'); },
-    fchmod() { throw new Error('Not implemented'); },
-    fchown() { throw new Error('Not implemented'); },
-    fstat() { throw new Error('Not implemented'); },
-    fsync() { throw new Error('Not implemented'); },
-    ftruncate() { throw new Error('Not implemented'); },
-    lchown() { throw new Error('Not implemented'); },
-    link() { throw new Error('Not implemented'); },
-    lstat() { throw new Error('Not implemented'); },
-    mkdir() { throw new Error('Not implemented'); },
-    open() { throw new Error('Not implemented'); },
-    read() { throw new Error('Not implemented'); },
-    readdir() { throw new Error('Not implemented'); },
-    readlink() { throw new Error('Not implemented'); },
-    rename() { throw new Error('Not implemented'); },
-    rmdir() { throw new Error('Not implemented'); },
-    stat() { throw new Error('Not implemented'); },
-    symlink() { throw new Error('Not implemented'); },
-    truncate() { throw new Error('Not implemented'); },
-    unlink() { throw new Error('Not implemented'); },
-    utimes() { throw new Error('Not implemented'); }
+    chmod() {
+      throw new Error('Not implemented');
+    },
+    chown() {
+      throw new Error('Not implemented');
+    },
+    close() {
+      throw new Error('Not implemented');
+    },
+    fchmod() {
+      throw new Error('Not implemented');
+    },
+    fchown() {
+      throw new Error('Not implemented');
+    },
+    fstat() {
+      throw new Error('Not implemented');
+    },
+    fsync() {
+      throw new Error('Not implemented');
+    },
+    ftruncate() {
+      throw new Error('Not implemented');
+    },
+    lchown() {
+      throw new Error('Not implemented');
+    },
+    link() {
+      throw new Error('Not implemented');
+    },
+    lstat() {
+      throw new Error('Not implemented');
+    },
+    mkdir() {
+      throw new Error('Not implemented');
+    },
+    open() {
+      throw new Error('Not implemented');
+    },
+    read() {
+      throw new Error('Not implemented');
+    },
+    readdir() {
+      throw new Error('Not implemented');
+    },
+    readlink() {
+      throw new Error('Not implemented');
+    },
+    rename() {
+      throw new Error('Not implemented');
+    },
+    rmdir() {
+      throw new Error('Not implemented');
+    },
+    stat() {
+      throw new Error('Not implemented');
+    },
+    symlink() {
+      throw new Error('Not implemented');
+    },
+    truncate() {
+      throw new Error('Not implemented');
+    },
+    unlink() {
+      throw new Error('Not implemented');
+    },
+    utimes() {
+      throw new Error('Not implemented');
+    }
   };
 }
 
@@ -125,13 +173,19 @@ function createBrowserProcess() {
     env: {},
     argv: ['js'],
     cwd: () => '/',
-    chdir: () => { throw new Error('Not implemented'); },
-    umask: () => { throw new Error('Not implemented'); },
+    chdir: () => {
+      throw new Error('Not implemented');
+    },
+    umask: () => {
+      throw new Error('Not implemented');
+    },
     getuid: () => -1,
     getgid: () => -1,
     geteuid: () => -1,
     getegid: () => -1,
-    getgroups: () => { throw new Error('Not implemented'); }
+    getgroups: () => {
+      throw new Error('Not implemented');
+    }
   };
 }
 
@@ -169,24 +223,16 @@ export class ModernGo implements GoInstance {
 
     this._resetIdPool();
     this.importObject = this._createImportObject();
-    
+
     debugLog('Modern Go WASM runtime initialized for worker');
   }
 
   private _resetIdPool(): void {
-    this._values = [
-      NaN,
-      0,
-      null,
-      true,
-      false,
-      globalThis,
-      this
-    ];
+    this._values = [NaN, 0, null, true, false, globalThis, this];
     this._goRefCounts = new Array(this._values.length).fill(Infinity);
     this._ids.clear();
     this._idPool = [];
-    
+
     let id = this._values.length;
     for (let i = 0; i < 8; i++) {
       this._idPool.push(id++);
@@ -207,16 +253,16 @@ export class ModernGo implements GoInstance {
         // Runtime.wasmExit
         'runtime.wasmExit': (sp: number) => {
           if (!this.mem) return;
-          
+
           const code = this.mem.getInt32(sp + 8, true);
           this.exited = true;
           delete this._pendingEvent;
-          
+
           for (const [id, timer] of this._scheduledTimeouts) {
             clearTimeout(timer);
           }
           this._scheduledTimeouts.clear();
-          
+
           if (code !== 0) {
             debugLog(`Go program exited with code ${code}`, 'error');
           } else {
@@ -227,22 +273,23 @@ export class ModernGo implements GoInstance {
         // Runtime.wasmWrite
         'runtime.wasmWrite': (sp: number) => {
           if (!this.mem) return;
-          
+
           const fd = this.mem.getBigInt64(sp + 8, true);
           const p = this.mem.getBigInt64(sp + 16, true);
           const n = this.mem.getInt32(sp + 24, true);
-          
-          if (fd === 1n || fd === 2n) { // stdout or stderr
+
+          if (fd === 1n || fd === 2n) {
+            // stdout or stderr
             const data = new Uint8Array(this.mem.buffer, Number(p), n);
             const str = new TextDecoder().decode(data);
-            
+
             if (fd === 1n) {
               console.log(str);
             } else {
               console.error(str);
             }
           }
-          
+
           this.mem.setInt32(sp + 32, n, true);
         },
 
@@ -255,7 +302,7 @@ export class ModernGo implements GoInstance {
         // Runtime.nanotime1
         'runtime.nanotime1': (sp: number) => {
           if (!this.mem) return;
-          
+
           const nsec = BigInt(Math.floor(performance.now() * 1000000));
           this.mem.setBigInt64(sp + 8, nsec, true);
         },
@@ -263,11 +310,11 @@ export class ModernGo implements GoInstance {
         // Runtime.walltime
         'runtime.walltime': (sp: number) => {
           if (!this.mem) return;
-          
+
           const msec = Date.now();
           const sec = Math.floor(msec / 1000);
           const nsec = (msec % 1000) * 1000000;
-          
+
           this.mem.setBigInt64(sp + 8, BigInt(sec), true);
           this.mem.setInt32(sp + 16, nsec, true);
         },
@@ -275,25 +322,28 @@ export class ModernGo implements GoInstance {
         // Runtime.scheduleTimeoutEvent
         'runtime.scheduleTimeoutEvent': (sp: number) => {
           if (!this.mem) return;
-          
+
           const id = this._nextCallbackTimeoutID++;
           const delay = this.mem.getBigInt64(sp + 8, true);
-          
-          this._scheduledTimeouts.set(id, setTimeout(() => {
-            this._scheduledTimeouts.delete(id);
-            this._resume();
-          }, Number(delay)));
-          
+
+          this._scheduledTimeouts.set(
+            id,
+            setTimeout(() => {
+              this._scheduledTimeouts.delete(id);
+              this._resume();
+            }, Number(delay))
+          );
+
           this.mem.setInt32(sp + 16, id, true);
         },
 
         // Runtime.clearTimeoutEvent
         'runtime.clearTimeoutEvent': (sp: number) => {
           if (!this.mem) return;
-          
+
           const id = this.mem.getInt32(sp + 8, true);
           const timer = this._scheduledTimeouts.get(id);
-          
+
           if (timer) {
             clearTimeout(timer);
             this._scheduledTimeouts.delete(id);
@@ -303,7 +353,7 @@ export class ModernGo implements GoInstance {
         // Runtime.getRandomData
         'runtime.getRandomData': (sp: number) => {
           if (!this.mem) return;
-          
+
           const slice = this._loadSlice(sp + 8);
           crypto.getRandomValues(slice);
         },
@@ -380,26 +430,26 @@ export class ModernGo implements GoInstance {
     if (this.exited) {
       throw new Error('Go program has already exited');
     }
-    
+
     // Resume execution
     debugLog('Resuming Go execution');
   }
 
   private _loadSlice(addr: number): Uint8Array {
     if (!this.mem) throw new Error('Memory not initialized');
-    
+
     const array = this.mem.getBigInt64(addr, true);
     const len = this.mem.getBigInt64(addr + 8, true);
-    
+
     return new Uint8Array(this.mem.buffer, Number(array), Number(len));
   }
 
   private _loadString(addr: number): string {
     if (!this.mem) throw new Error('Memory not initialized');
-    
+
     const saddr = this.mem.getBigInt64(addr, true);
     const len = this.mem.getBigInt64(addr + 8, true);
-    
+
     return new TextDecoder().decode(new Uint8Array(this.mem.buffer, Number(saddr), Number(len)));
   }
 
@@ -414,31 +464,30 @@ export class ModernGo implements GoInstance {
 
     try {
       debugLog('Starting Go WASM program execution');
-      
+
       this.mem = new DataView((instance.exports.mem as WebAssembly.Memory).buffer);
       (this.importObject.go as any).mem = instance.exports.mem;
-      
+
       goRuntimeState.instance = instance;
       goRuntimeState.ready = true;
       goRuntimeState.error = null;
-      
+
       // Run the Go program
       const runFunc = instance.exports.run as CallableFunction;
       if (typeof runFunc !== 'function') {
         throw new Error('WASM module does not export run function');
       }
-      
+
       await runFunc();
-      
+
       debugLog('Go WASM program completed successfully');
-      
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       debugLog(`Go WASM execution error: ${errorMsg}`, 'error');
-      
+
       goRuntimeState.error = error instanceof Error ? error : new Error(errorMsg);
       goRuntimeState.ready = false;
-      
+
       throw error;
     }
   }

@@ -87,9 +87,13 @@ function createBrowserFS() {
   const decoder = new TextDecoder('utf-8');
 
   return {
-    constants: { 
-      O_WRONLY: -1, O_RDWR: -1, O_CREAT: -1, 
-      O_TRUNC: -1, O_APPEND: -1, O_EXCL: -1 
+    constants: {
+      O_WRONLY: -1,
+      O_RDWR: -1,
+      O_CREAT: -1,
+      O_TRUNC: -1,
+      O_APPEND: -1,
+      O_EXCL: -1
     },
     writeSync(fd: number, buf: Uint8Array): number {
       outputBuf += decoder.decode(buf);
