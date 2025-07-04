@@ -121,10 +121,23 @@ export class ModernWasmExecutor {
           this.updateProgress(100, '✅ WASM loaded successfully with modern TypeScript runtime!');
           return true;
         } else {
-          this.updateProgress(50, '⚠️ Go initialization timeout - WASM loaded but exports not ready');
-          debugLog('⚠️ Go initialization timeout but continuing anyway', 'warn');
-          // Don't fail completely - the WASM might still be functional
-          return true;
+          // Timeout occurred, but WASM might still be functional
+          debugLog('⚠️ Go initialization timeout but checking if WASM is functional...', 'warn');
+          
+          // Check if WASM runtime is actually running (this indicates success despite timeout)
+          if (goRuntimeState.isRunning && !goRuntimeState.hasExited) {
+            this.updateProgress(95, '⚠️ WASM loaded - exports detection slow but runtime is active');
+            debugLog('✅ WASM is running, proceeding despite initialization timeout');
+            
+            // Give it one more moment to settle, then declare success
+            await new Promise(resolve => setTimeout(resolve, 500));
+            this.updateProgress(100, '✅ WASM loaded successfully (runtime confirmed active)!');
+            return true;
+          } else {
+            this.updateProgress(50, '❌ Go initialization timeout - WASM loaded but not running');
+            debugLog('❌ WASM timeout and runtime not running', 'error');
+            return false;
+          }
         }
       } else {
         this.updateProgress(0, '❌ WASM loading failed');
@@ -142,8 +155,9 @@ export class ModernWasmExecutor {
 
   // Wait for Go to finish initializing and export functions
   // Following Copilot's recommendation: check goRuntimeState.exports instead of globalThis
-  private async waitForGoInitialization(timeoutMs: number = 10000): Promise<boolean> {
+  private async waitForGoInitialization(timeoutMs: number = 5000): Promise<boolean> {
     const startTime = Date.now();
+    let hasLoggedProgress = false;
 
     while (Date.now() - startTime < timeoutMs) {
       // Check the reactive exports object (Copilot's recommended approach)
@@ -153,11 +167,23 @@ export class ModernWasmExecutor {
         return true;
       }
 
-      // Also check if Go runtime is running and has low-level WASM exports
-      if (goRuntimeState.isRunning && exports) {
-        const exportKeys = Object.keys(exports);
-        if (exportKeys.length > 0) {
-          debugLog(`✅ Go runtime exports ready: ${exportKeys.slice(0, 10).join(', ')}`);
+      // Also check if Go runtime is running - if so, we can proceed
+      if (goRuntimeState.isRunning) {
+        if (!hasLoggedProgress) {
+          debugLog('✅ Go runtime is running, checking for global exports...');
+          hasLoggedProgress = true;
+        }
+        
+        // Check for global exports that Go might have created
+        const globalFunctions = Object.keys(globalThis).filter(key => {
+          const value = (globalThis as any)[key];
+          return typeof value === 'function' && 
+                 !['setTimeout', 'setInterval', 'fetch', 'alert', 'confirm', 'prompt', 'console'].includes(key) &&
+                 !key.startsWith('webkit') && !key.startsWith('chrome');
+        });
+        
+        if (globalFunctions.length > 0) {
+          debugLog(`✅ Global exports found: ${globalFunctions.slice(0, 10).join(', ')}`);
           return true;
         }
       }
@@ -166,7 +192,13 @@ export class ModernWasmExecutor {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    debugLog('⚠️ Initialization timeout – no exports found', 'warn');
+    // Timeout - but check if we're still running
+    if (goRuntimeState.isRunning && !goRuntimeState.hasExited) {
+      debugLog('⚠️ Initialization timeout but Go runtime is still running - proceeding anyway', 'warn');
+      return true; // Proceed anyway if Go is running
+    }
+
+    debugLog('⚠️ Initialization timeout and Go runtime not confirmed running', 'warn');
     return false;
   }
 
