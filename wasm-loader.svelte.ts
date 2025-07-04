@@ -17,7 +17,6 @@
  *
  */
 import { browser } from '$app/environment';
-import wasmUrl from '/calculator.wasm?url';
 import { getModernWasmExecutor, wasmState } from './wasm-exec.svelte';
 
 export let enhancedWasmState = $state({
@@ -28,7 +27,7 @@ export let enhancedWasmState = $state({
   executor: null as ReturnType<typeof getModernWasmExecutor> | null
 });
 
-export async function loadModernWasm(): Promise<boolean> {
+export async function loadModernWasm(wasmUrl: string): Promise<boolean> {
   if (!browser) return false;
 
   enhancedWasmState.isLoading = true;
