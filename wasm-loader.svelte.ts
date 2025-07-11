@@ -1,71 +1,126 @@
 /**
- * Modern WASM Loader with Svelte 5 Runes -
- * with Microsoft Copilot streamlined recommendation
+ * Modern WASM Loader with Svelte 5 Runes - Leaner Runes-Native Implementation
+ * Following modern reactive patterns with single $state object and computed getters
  *
  * Copyright (C) 2025 James Armstrong (github.com/BlazesRus)
  * Generated with GitHub Copilot assistance and Microsoft Copilot assistance
  *
  * MIT License
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 import { browser } from '$app/environment';
-import { getModernWasmExecutor, wasmState } from './wasm-exec.svelte';
+import { getModernWasmExecutor } from './wasm-exec.svelte';
+import { addDebugMessage, captureError } from './debugLogger.svelte';
 
-export let enhancedWasmState = $state({
+function debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
+  addDebugMessage(`🔧 WASM Loader: ${message}`, level);
+}
+
+// 1) Central reactive state - everything lives in one $state block
+export const wasmLoaderState = $state({
+  // Input URL
+  url: '' as string,
+
+  // Load flags
   isLoading: false,
-  isReady: false,
-  error: null as string | null,
   progress: 0,
-  executor: null as ReturnType<typeof getModernWasmExecutor> | null
+  error: null as string | null,
+
+  // The executor instance
+  executor: null as ReturnType<typeof getModernWasmExecutor> | null,
+
+  // History of progress values for debugging/visualization
+  progressHistory: [] as number[],
+
+  // 2) Derived getters - computed on the fly when underlying state changes
+  get isReady() {
+    return !this.isLoading && this.error === null && !!this.executor?.isReady();
+  },
+
+  get lastProgress() {
+    return this.progressHistory.at(-1) ?? 0;
+  },
+
+  get hasError() {
+    return this.error !== null;
+  },
+
+  get hasExports() {
+    return !!this.executor && Object.keys(this.executor.getExports()).length > 0;
+  },
+
+  get exports() {
+    return this.executor?.getExports() ?? {};
+  }
 });
 
-export async function loadWasm(wasmUrl: string): Promise<boolean> {
-  if (!browser) return false;
+// 4) Load function updates state in one place with immutable updates
+export async function loadWasm(url: string): Promise<boolean> {
+  if (!browser) {
+    debugLog('Not in browser environment, skipping WASM load', 'warn');
+    return false;
+  }
 
-  enhancedWasmState.isLoading = true;
-  enhancedWasmState.progress = 0;
-  enhancedWasmState.error = null;
+  // Reset state with immutable updates
+  wasmLoaderState.url = url;
+  wasmLoaderState.isLoading = true;
+  wasmLoaderState.progress = 0;
+  wasmLoaderState.error = null;
+  wasmLoaderState.progressHistory = [];
 
-  const executor = getModernWasmExecutor(p => (enhancedWasmState.progress = p));
-  enhancedWasmState.executor = executor;
+  // Get fresh executor instance
+  const executor = getModernWasmExecutor();
+  wasmLoaderState.executor = executor;
+
+  // Progress tracking function that updates our state
+  const updateProgress = (progress: number) => {
+    wasmLoaderState.progress = progress;
+    wasmLoaderState.progressHistory = [...wasmLoaderState.progressHistory, progress];
+
+    // Manually trim history if it gets too long
+    if (wasmLoaderState.progressHistory.length > 20) {
+      wasmLoaderState.progressHistory = wasmLoaderState.progressHistory.slice(-20);
+    }
+  };
 
   try {
-    const ok = await executor.loadWasm(wasmUrl);
-    enhancedWasmState.isReady = ok;
-    enhancedWasmState.isLoading = false;
+    debugLog(`Starting WASM load from ${url}`, 'info');
 
-    if (!ok) throw new Error('Executor reported failure');
-    console.log('✅ Wasm exports:', Object.keys(executor.getExports()));
+    // Initial progress
+    updateProgress(10);
+
+    // Load WASM - the executor will update its own reactive state
+    const ok = await executor.loadWasm(url);
+
+    if (!ok) {
+      throw new Error('WASM executor reported failure');
+    }
+
+    // Wait for executor to be ready (reactive check)
+    updateProgress(90);
+
+    // Final check - use reactive readiness
+    if (!executor.isReady()) {
+      throw new Error('WASM loaded but executor not ready');
+    }
+
+    debugLog(`WASM loaded with exports: ${Object.keys(executor.getExports()).join(', ')}`, 'info');
+
+    // Complete
+    updateProgress(100);
+    wasmLoaderState.isLoading = false;
+
     return true;
   } catch (err) {
-    enhancedWasmState.error = String(err);
-    enhancedWasmState.isLoading = false;
-    enhancedWasmState.progress = 0;
-    console.error('❌ Wasm load failed:', err);
+    const msg = String(err);
+
+    // Immutable error state update
+    wasmLoaderState.error = msg;
+    wasmLoaderState.isLoading = false;
+    wasmLoaderState.progress = 0;
+
+    captureError(err instanceof Error ? err : new Error(msg), 'WASM-Loader');
+    debugLog(`WASM load failed: ${msg}`, 'error');
+
     return false;
   }
 }
-
-// Legacy aliases for compatibility
-export const getWasmState = () => enhancedWasmState;
-export const getWasmExecutor = () => enhancedWasmState.executor;
-export const isWasmReady = () => enhancedWasmState.isReady && enhancedWasmState.executor?.isReady() === true;
-
-export { wasmState as lowLevelWasmState };

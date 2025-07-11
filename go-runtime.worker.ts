@@ -1,14 +1,37 @@
 /**
  * Worker-compatible Modern TypeScript Go WASM Runtime
  *
- * This is a worker-safe version of go-runtime.svelte.ts that doesn't use SvelteKit imports.
- * Used in web workers where $app/environment is not available.
+ * This is a worker-safe version of go-runtime.svelte that doesn't use SvelteKit imports.
+ * Used in web workers where $app/environment and Svelte runes are not available.
+ * Based on the main go-runtime.svelte but with plain JavaScript state management.
  */
+
+// Worker context doesn't have access to debugLogger from main thread
+// Simple console-based logging for workers
+function addDebugMessage(message: string, level: 'info' | 'warn' | 'error' = 'info') {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}`;
+
+  switch (level) {
+    case 'error':
+      console.error(logMessage);
+      break;
+    case 'warn':
+      console.warn(logMessage);
+      break;
+    default:
+      console.log(logMessage);
+  }
+}
+
+function captureError(error: Error, context: string) {
+  console.error(`[${context}]`, error);
+}
 
 // In worker context, we're always in a browser-like environment
 const browser = true;
 
-// Comprehensive type definitions for Go WASM
+// Comprehensive type definitions for Go WASM (same as main version)
 export interface GoInstance {
   importObject: WebAssembly.Imports;
   run(instance: WebAssembly.Instance): Promise<void>;
@@ -19,36 +42,243 @@ export interface GoInstance {
   _nextCallbackTimeoutID?: number;
   exited?: boolean;
   mem?: DataView;
+  _values?: any[];
+  _goRefCounts: number[];
+  _ids: Map<any, number>;
+  _idPool: number[];
+  _inst?: WebAssembly.Instance;
+  _resolveExitPromise?: (value?: any) => void;
 }
 
-// Simple state for worker context (no Svelte runes)
-const goRuntimeState = {
-  debugEnabled: false,
-  exports: null as any,
-  instance: null as WebAssembly.Instance | null,
-  ready: false,
-  error: null as Error | null,
-  loadingProgress: 0
+/**
+ * Worker Manager State Interface
+ */
+export interface WorkerManagerState {
+  isInitialized: boolean;
+  isRunning: boolean;
+  hasExited: boolean;
+  error: string | null;
+  debugEnabled: boolean;
+  logs: string[];
+  exports: Record<string, any>;
+  memoryUsage: number;
+  lastOperation: string | null;
+  _wasmInstance: WebAssembly.Instance | null;
+}
+
+// Plain JavaScript state for worker context (no Svelte runes)
+const workerState = {
+  isInitialized: false,
+  isRunning: false,
+  hasExited: false,
+  error: null as string | null,
+  debugEnabled: true,
+  logs: [] as string[],
+  exports: {} as Record<string, any>,
+  memoryUsage: 0,
+  lastOperation: null as string | null,
+
+  // internal place to stash the live WASM instance
+  _wasmInstance: null as WebAssembly.Instance | null,
+
+  // computed: spread-less copy of the live exports
+  get rawExports(): Record<string, any> {
+    return (this._wasmInstance?.exports as Record<string, any>) ?? {};
+  },
+
+  // computed property
+  get isReady() {
+    return this.isInitialized && this.isRunning && !this.hasExited && this.error === null;
+  },
+
+  // derived field built into the same state object
+  get wasmExports() {
+    return { ...this.exports };
+  }
 };
 
 /**
- * Simple debug logging for worker context
+ * Enhanced debug logging for worker context with reactive logs
  */
 function debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
-  if (!goRuntimeState.debugEnabled) return;
+  if (!workerState.debugEnabled) return;
 
   const timestamp = new Date().toISOString();
   const logMessage = `[Go WASM Worker ${timestamp}] ${message}`;
 
+  // Add to reactive logs
+  workerState.logs = [...workerState.logs, logMessage];
+  if (workerState.logs.length > 50) {
+    workerState.logs = workerState.logs.slice(-50);
+  }
+
   switch (level) {
     case 'warn':
-      console.warn(logMessage);
+      addDebugMessage(`⚠️ Go Runtime Worker: ${message}`, 'warn');
       break;
     case 'error':
-      console.error(logMessage);
+      addDebugMessage(`🚨 Go Runtime Worker: ${message}`, 'error');
       break;
     default:
-      console.log(logMessage);
+      addDebugMessage(`ℹ️ Go Runtime Worker: ${message}`);
+  }
+}
+
+/**
+ * Modern Worker Manager for Go WASM Runtime
+ *
+ * This class provides a worker-safe implementation of the Go WASM runtime
+ * with plain JavaScript state management (no Svelte runes).
+ */
+export class ModernWorkerManager {
+  private state: WorkerManagerState;
+  private goInstance: ModernGo;
+
+  constructor() {
+    this.state = {
+      isInitialized: false,
+      isRunning: false,
+      hasExited: false,
+      error: null,
+      debugEnabled: true,
+      logs: [],
+      exports: {},
+      memoryUsage: 0,
+      lastOperation: null,
+      _wasmInstance: null
+    };
+
+    this.goInstance = new ModernGo(this);
+    this.debugLog('ModernWorkerManager initialized');
+  }
+
+  /**
+   * Get current state (readonly copy)
+   */
+  getState(): Readonly<WorkerManagerState> {
+    return { ...this.state };
+  }
+
+  /**
+   * Check if runtime is ready
+   */
+  get isReady(): boolean {
+    return this.state.isInitialized && this.state.isRunning && !this.state.hasExited && this.state.error === null;
+  }
+
+  /**
+   * Get WASM exports
+   */
+  get wasmExports(): Record<string, any> {
+    return { ...this.state.exports };
+  }
+
+  /**
+   * Get raw exports directly from instance
+   */
+  get rawExports(): Record<string, any> {
+    return (this.state._wasmInstance?.exports as Record<string, any>) ?? {};
+  }
+
+  /**
+   * Enhanced debug logging for worker context with reactive logs
+   */
+  debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+    if (!this.state.debugEnabled) return;
+
+    const timestamp = new Date().toISOString();
+    const logMessage = `[Go WASM Worker ${timestamp}] ${message}`;
+
+    // Add to reactive logs
+    this.state.logs = [...this.state.logs, logMessage];
+    if (this.state.logs.length > 50) {
+      this.state.logs = this.state.logs.slice(-50);
+    }
+
+    switch (level) {
+      case 'warn':
+        addDebugMessage(`⚠️ Go Runtime Worker: ${message}`, 'warn');
+        break;
+      case 'error':
+        addDebugMessage(`🚨 Go Runtime Worker: ${message}`, 'error');
+        break;
+      default:
+        addDebugMessage(`ℹ️ Go Runtime Worker: ${message}`);
+    }
+  }
+
+  /**
+   * Initialize the Go WASM runtime
+   */
+  async initialize(): Promise<void> {
+    try {
+      this.debugLog('Initializing Go WASM runtime');
+      this.state.isInitialized = true;
+      this.state.error = null;
+      this.state.lastOperation = 'initialize';
+      this.debugLog('Go WASM runtime initialized successfully');
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.state.error = errorMsg;
+      this.state.isInitialized = false;
+      this.debugLog(`Initialization failed: ${errorMsg}`, 'error');
+      throw error;
+    }
+  }
+
+  /**
+   * Load and run WASM instance
+   */
+  async loadAndRun(wasmBytes: ArrayBuffer): Promise<void> {
+    try {
+      this.debugLog('Loading WASM module');
+
+      const module = await WebAssembly.compile(wasmBytes);
+      const instance = await WebAssembly.instantiate(module, this.goInstance.importObject);
+
+      this.state._wasmInstance = instance;
+      this.state.exports = { ...instance.exports };
+      this.state.memoryUsage = (instance.exports.mem as WebAssembly.Memory).buffer.byteLength;
+      this.state.lastOperation = 'load';
+
+      this.debugLog('WASM module loaded, starting execution');
+      await this.goInstance.run(instance);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.state.error = errorMsg;
+      this.state.isRunning = false;
+      this.debugLog(`Load and run failed: ${errorMsg}`, 'error');
+      throw error;
+    }
+  }
+
+  /**
+   * Reset the runtime state
+   */
+  reset(): void {
+    this.debugLog('Resetting Go WASM runtime');
+
+    this.state.isInitialized = false;
+    this.state.isRunning = false;
+    this.state.hasExited = false;
+    this.state.error = null;
+    this.state.logs = [];
+    this.state.exports = {};
+    this.state.memoryUsage = 0;
+    this.state.lastOperation = 'reset';
+    this.state._wasmInstance = null;
+
+    // Reset Go instance
+    this.goInstance = new ModernGo(this);
+
+    this.debugLog('Go WASM runtime reset completed');
+  }
+
+  /**
+   * Update state from Go instance
+   */
+  updateState(updates: Partial<WorkerManagerState>): void {
+    Object.assign(this.state, updates);
   }
 }
 
@@ -69,7 +299,7 @@ function createBrowserFS() {
       if (fd === 1) {
         // stdout
         const decoder = new TextDecoder();
-        console.log(decoder.decode(buffer));
+        addDebugMessage(decoder.decode(buffer));
       } else if (fd === 2) {
         // stderr
         const decoder = new TextDecoder();
@@ -202,29 +432,34 @@ export class ModernGo implements GoInstance {
   public exited = false;
   public mem?: DataView;
 
-  private _values: any[] = [];
-  private _goRefCounts: number[] = [];
-  private _ids = new Map<any, number>();
-  private _idPool: number[] = [];
+  public _values: any[] = [];
+  public _goRefCounts: number[] = [];
+  public _ids = new Map<any, number>();
+  public _idPool: number[] = [];
+  public _inst?: WebAssembly.Instance;
+  public _resolveExitPromise?: (value?: any) => void;
 
-  constructor() {
-    debugLog('Initializing Modern Go WASM runtime for worker');
+  private manager: ModernWorkerManager;
+
+  constructor(manager: ModernWorkerManager) {
+    this.manager = manager;
+    this.manager.debugLog('Initializing Modern Go WASM runtime for worker');
 
     // Initialize browser environment
-    if (browser && !globalThis.fs) {
+    if (browser && !(globalThis as any).fs) {
       (globalThis as any).fs = createBrowserFS();
-      debugLog('Browser filesystem initialized');
+      this.manager.debugLog('Browser filesystem initialized');
     }
 
     if (browser && !globalThis.process) {
       (globalThis as any).process = createBrowserProcess();
-      debugLog('Browser process initialized');
+      this.manager.debugLog('Browser process initialized');
     }
 
     this._resetIdPool();
     this.importObject = this._createImportObject();
 
-    debugLog('Modern Go WASM runtime initialized for worker');
+    this.manager.debugLog('Modern Go WASM runtime initialized for worker');
   }
 
   private _resetIdPool(): void {
@@ -238,9 +473,6 @@ export class ModernGo implements GoInstance {
       this._idPool.push(id++);
     }
   }
-
-  // ... [Include all the other methods from the original go-runtime.svelte.ts]
-  // For brevity, I'll include the key methods that are needed
 
   private _createImportObject(): WebAssembly.Imports {
     return {
@@ -256,6 +488,14 @@ export class ModernGo implements GoInstance {
 
           const code = this.mem.getInt32(sp + 8, true);
           this.exited = true;
+
+          // Update manager state
+          this.manager.updateState({
+            hasExited: true,
+            isRunning: false,
+            lastOperation: 'exit'
+          });
+
           delete this._pendingEvent;
 
           for (const [id, timer] of this._scheduledTimeouts) {
@@ -264,9 +504,15 @@ export class ModernGo implements GoInstance {
           this._scheduledTimeouts.clear();
 
           if (code !== 0) {
-            debugLog(`Go program exited with code ${code}`, 'error');
+            this.manager.debugLog(`Go program exited with code ${code}`, 'error');
+            this.manager.updateState({ error: `Program exited with code ${code}` });
           } else {
-            debugLog('Go program exited successfully');
+            this.manager.debugLog('Go program exited successfully');
+          }
+
+          // Resolve the exit promise
+          if (this._resolveExitPromise) {
+            this._resolveExitPromise(code);
           }
         },
 
@@ -284,7 +530,7 @@ export class ModernGo implements GoInstance {
             const str = new TextDecoder().decode(data);
 
             if (fd === 1n) {
-              console.log(str);
+              addDebugMessage(str);
             } else {
               console.error(str);
             }
@@ -367,79 +613,285 @@ export class ModernGo implements GoInstance {
           // Implementation for string values
         },
 
+        // syscall/js.valueGet
         'syscall/js.valueGet': (sp: number) => {
-          // Implementation for getting values
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const p = this._loadString(sp + 16);
+          const result = Reflect.get(v, p);
+          this._storeValue(sp + 32, result);
         },
 
+        // syscall/js.valueSet
         'syscall/js.valueSet': (sp: number) => {
-          // Implementation for setting values
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const p = this._loadString(sp + 16);
+          const x = this._loadValue(sp + 32);
+          Reflect.set(v, p, x);
         },
 
+        // syscall/js.valueDelete
         'syscall/js.valueDelete': (sp: number) => {
-          // Implementation for deleting values
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const p = this._loadString(sp + 16);
+          Reflect.deleteProperty(v, p);
         },
 
+        // syscall/js.valueIndex
         'syscall/js.valueIndex': (sp: number) => {
-          // Implementation for indexing values
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const i = this.mem.getBigUint64(sp + 16, true);
+          this._storeValue(sp + 24, Reflect.get(v, Number(i)));
         },
 
+        // syscall/js.valueSetIndex
         'syscall/js.valueSetIndex': (sp: number) => {
-          // Implementation for setting indexed values
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const i = this.mem.getBigUint64(sp + 16, true);
+          const x = this._loadValue(sp + 24);
+          Reflect.set(v, Number(i), x);
         },
 
+        // syscall/js.valueCall
         'syscall/js.valueCall': (sp: number) => {
-          // Implementation for calling values
+          if (!this.mem) return;
+
+          try {
+            const v = this._loadValue(sp + 8);
+            const m = this._loadString(sp + 16);
+            const args = this._loadSliceOfValues(sp + 32);
+            const result = Reflect.apply(v[m], v, args);
+            this._storeValue(sp + 56, result);
+            this.mem.setUint8(sp + 64, 1);
+          } catch (err) {
+            this._storeValue(sp + 56, err);
+            this.mem.setUint8(sp + 64, 0);
+          }
         },
 
+        // syscall/js.valueInvoke
         'syscall/js.valueInvoke': (sp: number) => {
-          // Implementation for invoking values
+          if (!this.mem) return;
+
+          try {
+            const v = this._loadValue(sp + 8);
+            const args = this._loadSliceOfValues(sp + 16);
+            const result = Reflect.apply(v, undefined, args);
+            this._storeValue(sp + 40, result);
+            this.mem.setUint8(sp + 48, 1);
+          } catch (err) {
+            this._storeValue(sp + 40, err);
+            this.mem.setUint8(sp + 48, 0);
+          }
         },
 
+        // syscall/js.valueNew
         'syscall/js.valueNew': (sp: number) => {
-          // Implementation for creating new values
+          if (!this.mem) return;
+
+          try {
+            const v = this._loadValue(sp + 8);
+            const args = this._loadSliceOfValues(sp + 16);
+            const result = Reflect.construct(v, args);
+            this._storeValue(sp + 40, result);
+            this.mem.setUint8(sp + 48, 1);
+          } catch (err) {
+            this._storeValue(sp + 40, err);
+            this.mem.setUint8(sp + 48, 0);
+          }
         },
 
+        // syscall/js.valueLength
         'syscall/js.valueLength': (sp: number) => {
-          // Implementation for getting value length
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          this.mem.setBigUint64(sp + 16, BigInt(v.length), true);
         },
 
+        // syscall/js.valuePrepareString
         'syscall/js.valuePrepareString': (sp: number) => {
-          // Implementation for preparing strings
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const str = String(v);
+          const encoder = new TextEncoder();
+          const bytes = encoder.encode(str);
+          this._storeValue(sp + 16, bytes);
+          this.mem.setBigUint64(sp + 24, BigInt(bytes.length), true);
         },
 
+        // syscall/js.valueLoadString
         'syscall/js.valueLoadString': (sp: number) => {
-          // Implementation for loading strings
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const slice = this._loadSlice(sp + 16);
+          const decoder = new TextDecoder();
+          const str = decoder.decode(slice);
+          this._storeValue(sp + 24, str);
         },
 
+        // syscall/js.valueInstanceOf
         'syscall/js.valueInstanceOf': (sp: number) => {
-          // Implementation for instanceof checks
+          if (!this.mem) return;
+
+          const v = this._loadValue(sp + 8);
+          const t = this._loadValue(sp + 16);
+          this.mem.setUint8(sp + 24, v instanceof t ? 1 : 0);
         },
 
+        // syscall/js.copyBytesToGo
         'syscall/js.copyBytesToGo': (sp: number) => {
-          // Implementation for copying bytes to Go
+          if (!this.mem) return;
+
+          const dst = this._loadSlice(sp + 8);
+          const src = this._loadValue(sp + 32);
+          const n = Math.min(dst.length, src.length);
+          dst.set(src.subarray(0, n));
+          this.mem.setBigUint64(sp + 40, BigInt(n), true);
         },
 
+        // syscall/js.copyBytesToJS
         'syscall/js.copyBytesToJS': (sp: number) => {
-          // Implementation for copying bytes to JS
+          if (!this.mem) return;
+
+          const dst = this._loadValue(sp + 8);
+          const src = this._loadSlice(sp + 16);
+          const n = Math.min(dst.length, src.length);
+          dst.set(src.subarray(0, n));
+          this.mem.setBigUint64(sp + 40, BigInt(n), true);
+        },
+
+        debug: (value: any) => {
+          this.manager.debugLog(`Debug: ${value}`);
         }
       }
     };
   }
 
-  private _resume(): void {
-    if (this.exited) {
-      throw new Error('Go program has already exited');
+  private _ref(v: any): number {
+    if (v === null) return 2;
+    if (v === undefined) return 3;
+    if (typeof v === 'boolean') return v ? 4 : 5;
+    if (typeof v === 'number') return 1;
+    if (typeof v === 'string') return 1;
+    if (typeof v === 'symbol') {
+      let id = this._ids.get(v);
+      if (id === undefined) {
+        id = this._idPool.pop();
+        if (id === undefined) {
+          id = this._values.length;
+        }
+        this._values[id] = v;
+        this._goRefCounts[id] = 0;
+        this._ids.set(v, id);
+      }
+      this._goRefCounts[id]!++;
+      return id;
     }
 
-    // Resume execution
-    debugLog('Resuming Go execution');
+    let id = this._ids.get(v);
+    if (id === undefined) {
+      id = this._idPool.pop();
+      if (id === undefined) {
+        id = this._values.length;
+      }
+      this._values[id] = v;
+      this._goRefCounts[id] = 0;
+      this._ids.set(v, id);
+    }
+    this._goRefCounts[id]!++;
+    return id;
+  }
+
+  private _unref(id: number): void {
+    this._goRefCounts[id]!--;
+    if (this._goRefCounts[id] === 0) {
+      const v = this._values[id];
+      this._values[id] = null;
+      this._ids.delete(v);
+      this._idPool.push(id);
+    }
+  }
+
+  private _loadValue(addr: number): any {
+    if (!this.mem) throw new Error('Memory not initialized');
+
+    const f = this.mem.getBigUint64(addr, true);
+    if (f === 0n) return undefined;
+    if (f === 1n) return null;
+
+    return this._values[Number(f)];
+  }
+
+  private _storeValue(addr: number, v: any): void {
+    if (!this.mem) throw new Error('Memory not initialized');
+
+    const nanHead = 0x7ff80000;
+
+    if (typeof v === 'number' && v !== 0) {
+      if (isNaN(v)) {
+        this.mem.setUint32(addr + 4, nanHead, true);
+        this.mem.setUint32(addr, 0, true);
+        return;
+      }
+      this.mem.setBigUint64(addr, BigInt(v), true);
+      return;
+    }
+
+    if (v === undefined) {
+      this.mem.setBigUint64(addr, 0n, true);
+      return;
+    }
+
+    let id = this._ids.get(v);
+    if (id === undefined) {
+      id = this._idPool.pop();
+      if (id === undefined) {
+        id = this._values.length;
+      }
+      this._values[id] = v;
+      this._goRefCounts[id] = 0;
+      this._ids.set(v, id);
+    }
+    this._goRefCounts[id]!++;
+
+    let typeFlag = 0;
+    switch (typeof v) {
+      case 'object':
+        if (v !== null) {
+          typeFlag = 1;
+        }
+        break;
+      case 'string':
+        typeFlag = 2;
+        break;
+      case 'symbol':
+        typeFlag = 3;
+        break;
+      case 'function':
+        typeFlag = 4;
+        break;
+    }
+    this.mem.setUint32(addr + 4, nanHead | typeFlag, true);
+    this.mem.setUint32(addr, id, true);
   }
 
   private _loadSlice(addr: number): Uint8Array {
     if (!this.mem) throw new Error('Memory not initialized');
 
-    const array = this.mem.getBigInt64(addr, true);
-    const len = this.mem.getBigInt64(addr + 8, true);
+    const array = this.mem.getBigUint64(addr, true);
+    const len = this.mem.getBigUint64(addr + 8, true);
 
     return new Uint8Array(this.mem.buffer, Number(array), Number(len));
   }
@@ -447,14 +899,56 @@ export class ModernGo implements GoInstance {
   private _loadString(addr: number): string {
     if (!this.mem) throw new Error('Memory not initialized');
 
-    const saddr = this.mem.getBigInt64(addr, true);
-    const len = this.mem.getBigInt64(addr + 8, true);
+    const saddr = this.mem.getBigUint64(addr, true);
+    const len = this.mem.getBigUint64(addr + 8, true);
 
     return new TextDecoder().decode(new Uint8Array(this.mem.buffer, Number(saddr), Number(len)));
   }
 
+  private _loadSliceOfValues(addr: number): any[] {
+    if (!this.mem) throw new Error('Memory not initialized');
+
+    const array = this.mem.getBigUint64(addr, true);
+    const len = this.mem.getBigUint64(addr + 8, true);
+    const values: any[] = [];
+
+    for (let i = 0; i < Number(len); i++) {
+      values.push(this._loadValue(Number(array) + i * 8));
+    }
+
+    return values;
+  }
+
+  private _resume(): void {
+    if (this.exited) {
+      throw new Error('Go program has already exited');
+    }
+
+    if (!this._inst) {
+      throw new Error('WebAssembly instance not available');
+    }
+
+    // Resume execution
+    this.manager.debugLog('Resuming Go execution');
+    (this._inst.exports.resume as Function)();
+
+    if (this.exited && this._resolveExitPromise) {
+      this._resolveExitPromise();
+    }
+  }
+
+  private _makeFuncWrapper(id: number): Function {
+    const go = this;
+    return function (this: any, ...args: any[]) {
+      const event: any = { id: id, this: this, args: args };
+      go._pendingEvent = event;
+      go._resume();
+      return event.result;
+    };
+  }
+
   /**
-   * Run the Go program
+   * Run the Go program with enhanced reactive state management
    */
   async run(instance: WebAssembly.Instance): Promise<void> {
     if (!browser) {
@@ -463,41 +957,96 @@ export class ModernGo implements GoInstance {
     }
 
     try {
-      debugLog('Starting Go WASM program execution');
+      this.manager.debugLog('Starting Go WASM program execution');
+
+      // Initialize runtime state
+      this.manager.updateState({
+        isInitialized: true,
+        isRunning: true,
+        hasExited: false,
+        error: null,
+        lastOperation: 'run'
+      });
 
       this.mem = new DataView((instance.exports.mem as WebAssembly.Memory).buffer);
+      this._inst = instance;
       (this.importObject.go as any).mem = instance.exports.mem;
 
-      goRuntimeState.instance = instance;
-      goRuntimeState.ready = true;
-      goRuntimeState.error = null;
+      // Store the instance in manager state
+      this.manager.updateState({
+        _wasmInstance: instance,
+        memoryUsage: this.mem.buffer.byteLength,
+        exports: { ...instance.exports }
+      });
 
-      // Run the Go program
-      const runFunc = instance.exports.run as CallableFunction;
-      if (typeof runFunc !== 'function') {
-        throw new Error('WASM module does not export run function');
-      }
+      // Set up environment variables
+      this.env = {
+        GOOS: 'js',
+        GOARCH: 'wasm',
+        GO_WASM_DEBUG: this.manager.getState().debugEnabled ? 'true' : 'false'
+      };
 
-      await runFunc();
+      // Prepare arguments and call Go main
+      let offset = 4096;
+      const strPtr = (str: string): number => {
+        const ptr = offset;
+        const bytes = new TextEncoder().encode(str + '\0');
+        new Uint8Array(this.mem!.buffer, offset, bytes.length).set(bytes);
+        offset += bytes.length;
+        if (offset % 8 !== 0) {
+          offset += 8 - (offset % 8);
+        }
+        return ptr;
+      };
 
-      debugLog('Go WASM program completed successfully');
+      const argc = this.argv.length;
+      const argvPtrs: number[] = [];
+      this.argv.forEach(arg => {
+        argvPtrs.push(strPtr(arg));
+      });
+
+      this.mem.setBigInt64(offset, BigInt(argc), true);
+      this.mem.setBigInt64(offset + 8, BigInt(argvPtrs[0] || 0), true);
+
+      // Create exit promise for proper cleanup
+      const exitPromise = new Promise<void>(resolve => {
+        this._resolveExitPromise = resolve;
+      });
+
+      // Start the Go program
+      this.manager.debugLog('Calling Go main function');
+      (instance.exports.run as Function)(offset, offset + 8);
+
+      // Wait for program to exit
+      await exitPromise;
+
+      this.manager.debugLog('Go WASM program completed successfully');
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      debugLog(`Go WASM execution error: ${errorMsg}`, 'error');
+      captureError(error instanceof Error ? error : new Error(errorMsg), 'GoWasmExecution');
 
-      goRuntimeState.error = error instanceof Error ? error : new Error(errorMsg);
-      goRuntimeState.ready = false;
+      this.manager.updateState({
+        error: errorMsg,
+        isRunning: false
+      });
 
       throw error;
     }
   }
 }
 
-// Export the state and utilities for worker use
-export { goRuntimeState, debugLog };
-
 // Auto-initialize global Go if in worker context
-if (typeof globalThis !== 'undefined' && !globalThis.Go) {
-  (globalThis as any).Go = ModernGo;
-  debugLog('ModernGo class registered globally for worker context');
+if (typeof globalThis !== 'undefined' && !(globalThis as any).Go) {
+  // Create a default manager for backwards compatibility
+  const defaultManager = new ModernWorkerManager();
+  (globalThis as any).Go = class extends ModernGo {
+    constructor() {
+      super(defaultManager);
+    }
+  };
+
+  defaultManager.debugLog('ModernGo class registered globally for worker context');
 }
+
+// Export the utilities
+export { debugLog };
