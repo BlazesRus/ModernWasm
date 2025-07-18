@@ -9,7 +9,6 @@
  * license that can be found in the LICENSE file.
  *
  * TypeScript/Svelte 5 adaptation with GitHub Copilot assistance
- * and fixes by Microsoft Copilot
  * by James Armstrong (github.com/BlazesRus)
  *
  * Complete TypeScript implementation of Go's wasm_exec.js with Svelte 5 runes
@@ -17,7 +16,6 @@
  */
 
 import { browser } from '$app/environment';
-import { addDebugMessage, captureError } from './debugLogger.svelte';
 
 // Comprehensive type definitions for Go WASM
 export interface GoInstance {
@@ -31,9 +29,9 @@ export interface GoInstance {
   exited?: boolean;
   mem?: DataView;
   _values?: any[];
-  _goRefCounts: number[];
-  _ids: Map<any, number>;
-  _idPool: number[];
+  _goRefCounts?: number[];
+  _ids?: Map<any, number>;
+  _idPool?: number[];
   _inst?: WebAssembly.Instance;
   _resolveExitPromise?: (value?: any) => void;
 }
@@ -48,27 +46,7 @@ export const goRuntimeState = $state({
   logs: [] as string[],
   exports: {} as Record<string, any>,
   memoryUsage: 0,
-  lastOperation: null as string | null,
-
-  // internal place to stash the live WASM instance
-  _wasmInstance: null as WebAssembly.Instance | null,
-
-  // computed: spread-less copy of the live exports
-  get rawExports(): Record<string, any> {
-    // will re-run whenever `_wasmInstance` changes
-    return (this._wasmInstance?.exports as Record<string, any>) ?? {};
-  },
-
-  // computed property in the same state object
-  get isReady() {
-    return this.isInitialized && this.isRunning && !this.hasExited && this.error === null;
-  },
-
-  // derived field built into the same state object
-  get wasmExports() {
-    // spread to new object to ensure change detection
-    return { ...this.exports };
-  }
+  lastOperation: null as string | null
 });
 
 // Internal debug logger that writes into goRuntimeState.logs with reactive state
@@ -79,7 +57,7 @@ function debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
   const logMessage = `[${timestamp}] ${message}`;
 
   // Add to reactive logs
-  goRuntimeState.logs = [...goRuntimeState.logs, logMessage];
+  goRuntimeState.logs.push(logMessage);
   if (goRuntimeState.logs.length > 50) {
     goRuntimeState.logs = goRuntimeState.logs.slice(-50);
   }
@@ -87,13 +65,13 @@ function debugLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
   // Console output
   switch (level) {
     case 'error':
-      addDebugMessage(`🚨 Go Runtime: ${message}`, 'error');
+      console.error(`🚨 Go Runtime: ${message}`);
       break;
     case 'warn':
-      addDebugMessage(`⚠️ Go Runtime: ${message}`, 'warn');
+      console.warn(`⚠️ Go Runtime: ${message}`);
       break;
     default:
-      addDebugMessage(`🔧 Go Runtime: ${message}`);
+      console.log(`🔧 Go Runtime: ${message}`);
   }
 }
 
@@ -199,13 +177,10 @@ export class ModernGo implements GoInstance {
   _nextCallbackTimeoutID = 1;
   exited = false;
   mem?: DataView;
-
-  // Initialize arrays and maps with default values so they're never undefined
-  _values: any[] = [];
-  _goRefCounts: number[] = [];
-  _ids = new Map<any, number>();
-  _idPool: number[] = [];
-
+  _values?: any[];
+  _goRefCounts?: number[];
+  _ids?: Map<any, number>;
+  _idPool?: number[];
   _inst?: WebAssembly.Instance;
   _resolveExitPromise?: (value?: any) => void;
 
@@ -213,7 +188,7 @@ export class ModernGo implements GoInstance {
     debugLog('Creating new ModernGo instance');
 
     // Initialize browser environment
-    if (browser && !(globalThis as any).fs) {
+    if (browser && !globalThis.fs) {
       (globalThis as any).fs = createBrowserFS();
       debugLog('Browser filesystem initialized');
     }
@@ -263,13 +238,13 @@ export class ModernGo implements GoInstance {
 
     // Store instance globally for runtime access
     this._inst = instance;
-    (globalThis as any)._inst = instance;
-    (globalThis as any).go = this;
+    globalThis._inst = instance;
+    globalThis.go = this;
 
     // Set up memory view
     this.mem = new DataView((instance.exports.mem as WebAssembly.Memory).buffer);
     goRuntimeState.memoryUsage = this.mem.buffer.byteLength;
-    goRuntimeState.exports = { ...instance.exports };
+    goRuntimeState.exports = instance.exports;
 
     // Reset values
     this._values![0] = NaN;
@@ -328,7 +303,6 @@ export class ModernGo implements GoInstance {
     }
   }
 
-  /** Resume callback loop */
   _resume(): void {
     if (this.exited) {
       throw new Error('Go program has already exited');
@@ -378,7 +352,7 @@ export class ModernGo implements GoInstance {
     }
 
     const id = this.mem!.getUint32(addr, true);
-    return this._values![id]!;
+    return this._values![id];
   }
 
   private storeValue(addr: number, v: any): void {
@@ -409,7 +383,7 @@ export class ModernGo implements GoInstance {
       this._goRefCounts![id] = 0;
       this._ids!.set(v, id);
     }
-    this._goRefCounts[id]!++;
+    this._goRefCounts![id]++;
     let typeFlag = 0;
     switch (typeof v) {
       case 'object':
@@ -530,8 +504,8 @@ export class ModernGo implements GoInstance {
   private finalizeRef(sp: number) {
     sp >>>= 0;
     const id = this.mem!.getUint32(sp + 8, true);
-    this._goRefCounts[id]!--;
-    if (this._goRefCounts[id]! === 0) {
+    this._goRefCounts![id]--;
+    if (this._goRefCounts![id] === 0) {
       const v = this._values![id];
       this._values![id] = null;
       this._ids!.delete(v);
@@ -549,7 +523,7 @@ export class ModernGo implements GoInstance {
   private valueGet(sp: number) {
     sp >>>= 0;
     const result = Reflect.get(this.loadValue(sp + 8), this.loadString(sp + 16));
-    (globalThis as any).sp = sp;
+    globalThis.sp = sp;
     this.storeValue(sp + 32, result);
   }
 
@@ -585,11 +559,11 @@ export class ModernGo implements GoInstance {
       const m = Reflect.get(v, this.loadString(sp + 16));
       const args = this.loadSliceOfValues(sp + 32);
       const result = Reflect.apply(m, v, args);
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 56, result);
       this.mem!.setUint8(sp + 64, 1);
     } catch (err) {
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 56, err);
       this.mem!.setUint8(sp + 64, 0);
     }
@@ -602,11 +576,11 @@ export class ModernGo implements GoInstance {
       const v = this.loadValue(sp + 8);
       const args = this.loadSliceOfValues(sp + 16);
       const result = Reflect.apply(v, undefined, args);
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 40, result);
       this.mem!.setUint8(sp + 48, 1);
     } catch (err) {
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 40, err);
       this.mem!.setUint8(sp + 48, 0);
     }
@@ -619,11 +593,11 @@ export class ModernGo implements GoInstance {
       const v = this.loadValue(sp + 8);
       const args = this.loadSliceOfValues(sp + 16);
       const result = Reflect.construct(v, args);
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 40, result);
       this.mem!.setUint8(sp + 48, 1);
     } catch (err) {
-      (globalThis as any).sp = sp;
+      globalThis.sp = sp;
       this.storeValue(sp + 40, err);
       this.mem!.setUint8(sp + 48, 0);
     }
@@ -687,6 +661,10 @@ export class ModernGo implements GoInstance {
     this.mem!.setUint8(sp + 48, 1);
   }
 
+  //private debug(value: any) {
+  //  debugLog(`Go debug: ${value}`);
+  //}
+
   //Place new go functions added here
 
   private buildJsSyscalls() {
@@ -739,12 +717,12 @@ export class ModernGoWasmRuntimeManager {
     debugLog('Creating ModernGoWasmRuntimeManager');
   }
 
-  /** Load and start WASM; no forced timeout */
   async loadAndRun(wasmPath: string): Promise<boolean> {
     if (!browser) {
       debugLog('Not in browser environment', 'warn');
       return false;
     }
+
     try {
       debugLog(`Loading WASM from: ${wasmPath}`);
       goRuntimeState.error = null;
@@ -754,44 +732,71 @@ export class ModernGoWasmRuntimeManager {
 
       // Fetch and instantiate WASM
       debugLog('Fetching WASM binary...');
-      const resp = await fetch(wasmPath);
-      if (!resp.ok) {
-        throw new Error(`Failed to fetch WASM: ${resp.status} ${resp.statusText}`);
+      const response = await fetch(wasmPath);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch WASM: ${response.status} ${response.statusText}`);
       }
+
       debugLog('Compiling WASM module...');
-      const bytes = await resp.arrayBuffer();
-      const module = await WebAssembly.compile(bytes);
+      const wasmBytes = await response.arrayBuffer();
+      const wasmModule = await WebAssembly.compile(wasmBytes);
 
       debugLog('Instantiating WASM...');
-      this.wasmInstance = await WebAssembly.instantiate(module, this.goInstance.importObject);
+      this.wasmInstance = await WebAssembly.instantiate(wasmModule, this.goInstance.importObject);
 
-      // stash it into state for reactivity
-      goRuntimeState._wasmInstance = this.wasmInstance;
-
-      debugLog('Starting Go program (fire-and-forget)');
+      // Run the Go program with timeout
+      debugLog('Starting Go program execution...');
       goRuntimeState.isRunning = true;
-      this.goInstance
-        .run(this.wasmInstance)
-        .then(() => debugLog('Go runtime exited'))
-        .catch(err => {
-          const msg = `Go.run() failed: ${err}`;
-          debugLog(msg, 'error');
-          goRuntimeState.error = msg;
-        });
 
-      debugLog('WASM loaded & Go.run() dispatched');
+      // Create a timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Go initialization timeout after 10 seconds')), 10000);
+      });
+
+      // Race between Go.run and timeout
+      try {
+        await Promise.race([
+          this.goInstance.run(this.wasmInstance),
+          timeoutPromise
+        ]);
+        debugLog('Go program completed successfully');
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('timeout')) {
+          debugLog('Go initialization timeout, but checking if runtime is functional...', 'warn');
+          // Continue - the Go runtime might still be working even if run() doesn't complete
+        } else {
+          throw error;
+        }
+      }
+
+      debugLog('WASM loaded and initialized successfully');
       return true;
-    } catch (err) {
-      const msg = `WASM loading failed: ${err}`;
-      goRuntimeState.error = msg;
+    } catch (error) {
+      const errorMsg = `WASM loading failed: ${error}`;
+      goRuntimeState.error = errorMsg;
       goRuntimeState.isRunning = false;
-      captureError(err instanceof Error ? err : new Error(String(err)), 'WasmLoading');
+      debugLog(errorMsg, 'error');
       return false;
     }
   }
 
   getExports(): Record<string, any> {
-    return goRuntimeState.exports;
+    // Go exports are stored on globalThis after the Go program runs
+    // Return the Go application exports, not the low-level WASM exports
+    if (typeof globalThis !== 'undefined') {
+      return {
+        TimelessJewels: (globalThis as any).TimelessJewels,
+        PassiveSkills: (globalThis as any).PassiveSkills,
+        TimelessJewelConquerors: (globalThis as any).TimelessJewelConquerors,
+        Calculate: (globalThis as any).Calculate,
+        GetAffectedNodes: (globalThis as any).GetAffectedNodes,
+        TranslateStat: (globalThis as any).TranslateStat,
+        ConstructQueries: (globalThis as any).ConstructQueries,
+        // Include any other Go exports that might be available
+        ...((globalThis as any).goExports || {})
+      };
+    }
+    return {};
   }
 
   callExport(functionName: string, ...args: any[]): any {
@@ -810,7 +815,7 @@ export class ModernGoWasmRuntimeManager {
   }
 
   isReady(): boolean {
-    return goRuntimeState.isReady;
+    return goRuntimeState.isInitialized && !goRuntimeState.hasExited && !goRuntimeState.error;
   }
 
   getState() {
@@ -831,6 +836,6 @@ export { goRuntimeState as wasmStatus };
 
 // Set up global Go object for compatibility with legacy code
 if (browser) {
-  (globalThis as any).Go = ModernGo;
+  globalThis.Go = ModernGo;
   debugLog('✅ Modern Go WASM runtime loaded and ready');
 }

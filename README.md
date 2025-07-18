@@ -6,14 +6,14 @@ This library provides two different approaches for loading and working with WebA
 
 The ModernWasm library supports two distinct WASM loading approaches:
 
-1. **WASI Approach** (Recommended) - Modern, standards-based WASM loading
-2. **Legacy Go Runtime Approach** - Traditional Go wasm_exec.js runtime
+1. **WASI Approach** (Recommended) - Modern, standards-based WASM loading with class-based architecture
+2. **Legacy Go Runtime Approach** - Traditional Go wasm_exec.js runtime simulation
 
 ## Architecture
 
 ```
 ModernWasm/
-├── wasi-loader.svelte.ts           # WASI WASM loader (@wasmer/sdk)
+├── wasi-loader.svelte.ts           # WASI WASM loader (class-based, @wasmer/sdk)
 ├── wasm-loader.svelte.ts           # Legacy Go runtime loader
 ├── wasm-exec.svelte.ts            # Go wasm_exec.js wrapper
 ├── go-runtime.svelte.ts           # Go runtime management
@@ -26,21 +26,47 @@ ModernWasm/
 
 ### Features
 - ✅ **Standards-based**: Uses WebAssembly System Interface (WASI)
+- ✅ **Class-based**: Each `WasiLoader` instance manages its own WASM module
 - ✅ **Lightweight**: No heavy Go runtime required
 - ✅ **Fast startup**: Direct WebAssembly instantiation
 - ✅ **Browser native**: Uses `@wasmer/sdk` for WASI support
 - ✅ **Type safe**: Strong TypeScript integration
 - ✅ **Memory efficient**: Clean memory management
+- ✅ **Multiple modules**: Can load different WASM modules simultaneously
 
-### Files Involved
-- `wasi-loader.svelte.ts` - Main WASI loader with Svelte 5 runes
-- `debugLogger.svelte.ts` - Shared logging utilities
+### Class-Based Usage (Recommended)
 
-### Usage Example
+```typescript
+import { WasiLoader } from './wasi-loader.svelte';
+
+// Create a dedicated loader instance for your specific WASM module
+const myWasiLoader = new WasiLoader();
+
+// Load a WASI WASM module
+const success = await myWasiLoader.loadWasm('/path/to/module.wasm');
+
+if (success && myWasiLoader.isReady) {
+  // Call exported functions
+  const result = myWasiLoader.callFunction('YourExportedFunction', arg1, arg2);
+  
+  // Access exports directly
+  const exports = myWasiLoader.exports;
+  
+  // Read memory
+  const data = myWasiLoader.readMemory(offset, length);
+}
+
+// Each WasiLoader instance maintains its own state
+const anotherLoader = new WasiLoader();
+await anotherLoader.loadWasm('/another-module.wasm'); // Won't interfere with myWasiLoader
+```
+
+### Global Instance Usage (Backward Compatibility)
+
 ```typescript
 import { loadWasiWasm, callWasiFunction, wasiLoaderState } from './wasi-loader.svelte';
 
-// Load a WASI WASM module
+// Uses the default global instance
 const success = await loadWasiWasm('/path/to/module.wasm');
 
 if (success && wasiLoaderState.isReady) {
@@ -74,6 +100,7 @@ func YourFunction(param1, param2 int32) int32 {
 - ✅ **Rich API**: Access to full Go standard library
 - ⚠️ **Heavier**: Larger runtime overhead
 - ⚠️ **Go-specific**: Not standards-based
+- ⚠️ **Experimental**: Simulates `wasm_exec.js` but may not work correctly for all Go WASM modules
 
 ### Files Involved
 - `wasm-loader.svelte.ts` - Main legacy loader with Svelte 5 runes
@@ -131,36 +158,74 @@ Experimental Svelte 5 version of `wasm_exec.js`. Simulates the Go runtime in the
 
 ⚠️ **Note:** This approach is experimental and may not work correctly for all Go WASM modules. Considerable effort was spent attempting to get a modern Svelte 5-compatible version of `wasm_exec.js` working, but results may vary and some features may be incomplete or unreliable.
 
-## Shared Features
+## UTF-8 Encoding Setup
 
-Both approaches provide:
-- **Svelte 5 runes**: Reactive state management with `$state`
-- **Progress tracking**: Loading progress with history
-- **Error handling**: Comprehensive error capture and logging
-- **Debug logging**: Detailed logging with categories
-- **Memory management**: Utilities for reading/writing WASM memory
-- **TypeScript support**: Full type safety
+This library requires proper UTF-8 encoding. The project includes:
+
+- `.editorconfig` - Ensures UTF-8 encoding for all text files
+- `.gitattributes` - Forces UTF-8 encoding in Git
+- VS Code settings - Configured for UTF-8
+- PowerShell setup script (`setup-utf8.ps1`) - Configures terminal for UTF-8
+
+## Browser Compatibility & Error Resolution
+
+### Buffer Polyfill (REQUIRED for WASI)
+
+The WASI loader requires Node.js Buffer API for binary data handling. This project includes automatic Buffer polyfill injection:
+
+- **Vite Configuration**: Automatically includes Buffer polyfill in builds
+- **Client Hooks**: Injects Buffer globally before app initialization  
+- **Dependencies**: `buffer` package provides browser-compatible Buffer implementation
+
+If you see `ReferenceError: Buffer is not defined`, ensure:
+1. The `buffer` package is installed: `pnpm add buffer`
+2. Vite config includes Buffer polyfill settings
+3. Client hooks (`src/hooks.client.ts`) are properly configured
+
+### Session Storage Issues
+
+SvelteKit may encounter JSON parse errors from corrupted session storage. The app includes automatic cleanup:
+
+- **Automatic Recovery**: Detects and removes corrupted session storage entries
+- **Manual Cleanup**: Use `scripts/clear-session-storage.js` in browser console
+- **Complete Reset**: Run `sessionStorage.clear()` in console if needed
+
+See `BROWSER_ERROR_FIXES.md` for detailed troubleshooting.
 
 ## State Management
 
-Both loaders expose reactive state:
+Both loaders expose reactive state using Svelte 5 runes:
 
+### WASI Approach (Class-based)
 ```typescript
-// WASI approach
-import { wasiLoaderState } from './wasi-loader.svelte';
+import { WasiLoader } from './wasi-loader.svelte';
 
-// Legacy approach  
-import { wasmLoaderState } from './wasm-loader.svelte';
+const loader = new WasiLoader();
 
-// Both provide similar reactive interface
 $effect(() => {
-  if (loaderState.isReady) {
+  if (loader.isReady) {
     console.log('WASM module loaded successfully');
-    console.log('Available exports:', Object.keys(loaderState.exports));
+    console.log('Available exports:', Object.keys(loader.exports));
   }
   
-  if (loaderState.hasError) {
-    console.error('WASM loading failed:', loaderState.error);
+  if (loader.hasError) {
+    console.error('WASM loading failed:', loader.error);
+  }
+});
+```
+
+### Legacy Approach
+```typescript
+import { wasmLoaderState } from './wasm-loader.svelte';
+
+$effect(() => {
+  if (wasmLoaderState.isReady) {
+    console.log('WASM module loaded successfully');
+    console.log('Available exports:', Object.keys(wasmLoaderState.exports));
+  }
+  
+  if (wasmLoaderState.hasError) {
+    console.error('WASM loading failed:', wasmLoaderState.error);
   }
 });
 ```
@@ -173,6 +238,7 @@ $effect(() => {
 - Need lightweight, fast-loading modules
 - Prioritize performance and browser compatibility
 - Using simple exported functions
+- Need to load multiple WASM modules simultaneously
 
 ### Use Legacy When:
 - Migrating existing Go WASM projects
@@ -193,13 +259,21 @@ To use this library in another project:
    ```bash
    # For WASI approach
    npm install @wasmer/sdk
-   
-   # For legacy approach, copy wasm_exec.js from Go installation
    ```
 
-3. **Import and use:**
+3. **Set up UTF-8 encoding:**
+   ```bash
+   # Run the setup script (Windows/PowerShell)
+   .\setup-utf8.ps1
+   ```
+
+4. **Import and use:**
    ```typescript
-   // WASI approach
+   // WASI approach (class-based)
+   import { WasiLoader } from '$lib/ModernWasm/wasi-loader.svelte';
+   const loader = new WasiLoader();
+   
+   // WASI approach (global instance)
    import { loadWasiWasm } from '$lib/ModernWasm/wasi-loader.svelte';
    
    // Legacy approach
@@ -214,9 +288,8 @@ When contributing to this library:
 - Ensure TypeScript types are complete
 - Test with real WASM modules
 - Keep debug logging comprehensive
+- Ensure proper UTF-8 encoding
 
 ## License
 
 MIT License - See LICENSE file for details.
-
-Reusable Svelte 5 version of wasm.js
