@@ -27,7 +27,7 @@
  */
 import { browser } from '$app/environment';
 import { getModernWasmExecutor, wasmState } from './wasm-exec.svelte';
-import { debugLog, captureError } from './wasmDebugLogger.svelte';
+import { debugLog, captureError } from './wasmLogger.svelte';
 
 export let enhancedWasmState = $state({
   isLoading: false,

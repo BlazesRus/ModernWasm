@@ -7,18 +7,21 @@ This library provides two different approaches for loading and working with WebA
 The ModernWasm library supports two distinct WASM loading approaches:
 
 1. **WASI Approach** (Recommended) - Modern, standards-based WASM loading with class-based architecture
-2. **Legacy Go Runtime Approach** - Traditional Go wasm_exec.js runtime simulation
+2. **Legacy Go Runtime Approach**(LegacyApproach folder) - Traditional Go wasm_exec.js runtime simulation
+   
 
 ## Architecture
 
 ```
 ModernWasm/
-├── wasi-loader.svelte.ts           # WASI WASM loader (class-based, @wasmer/sdk)
-├── wasm-loader.svelte.ts           # Legacy Go runtime loader
-├── wasm-exec.svelte.ts            # Go wasm_exec.js wrapper
-├── go-runtime.svelte.ts           # Go runtime management
-├── go-runtime.worker.ts           # Web Worker for Go runtime
+├── wasi-loader.svelte.ts           # WASI WASM loader (class-based, @wasmer/wasi and @wasmer/sdk)
 ├── debugLogger.svelte.ts          # Shared debug logging
+├── LegacyApproach
+|	├── wasm-loader.svelte.ts           # Legacy Go runtime loader
+|	├── wasm-exec.svelte.ts            # Go wasm_exec.js wrapper
+|	├── go-runtime.svelte.ts           # Go runtime management
+|	├── go-runtime.worker.ts           # Web Worker for Go runtime
+|
 └── README.md                      # This file
 ```
 

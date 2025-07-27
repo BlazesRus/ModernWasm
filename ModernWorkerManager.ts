@@ -28,7 +28,7 @@
 import { browser } from '$app/environment';
 import { wrap, proxy, transfer } from 'comlink';
 import type { Remote } from 'comlink';
-import { addDebugMessage, captureError } from './debugLogger.svelte';
+import { addDebugMessage, captureError } from './wasmLogger.svelte';
 
 /**
  * Generic worker manager template that can be parameterized for different worker types

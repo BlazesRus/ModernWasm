@@ -26,7 +26,7 @@
  */
 
 import { browser } from '$app/environment';
-import { debugLog } from './wasmDebugLogger.svelte';
+import { debugLog } from './wasmLogger.svelte';
 import { getModernWasmRuntime, goRuntimeState, type ModernGoWasmRuntimeManager } from './go-runtime.svelte';
 
 // Re-export the reactive state for components
