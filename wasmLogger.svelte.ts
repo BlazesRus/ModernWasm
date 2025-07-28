@@ -134,7 +134,7 @@ export function clearLastError() {
 }
 
 // Convenience functions for different log levels
-export const debugLog = {
+export const wasmLog = {
   info: (message: string, context?: string) => addDebugMessage(message, 'info', context),
   warn: (message: string, context?: string) => addDebugMessage(message, 'warn', context),
   error: (message: string, context?: string) => addDebugMessage(message, 'error', context),
@@ -180,10 +180,7 @@ export const wasmDebug = {
 
       info.globalThis = {
         wasmExports: wasmExports.slice(0, 10), // First 10 exports
-        totalExports: wasmExports.length,
-        hasCalculate: typeof (globalThis as any).Calculate === 'function',
-        hasTimelessJewels: typeof (globalThis as any).TimelessJewels === 'object',
-        hasPassiveSkills: Array.isArray((globalThis as any).PassiveSkills)
+        totalExports: wasmExports.length
       };
 
       // WASM instance info if provided
