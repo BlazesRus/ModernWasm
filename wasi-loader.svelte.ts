@@ -24,6 +24,10 @@ export class WasiLoader {
   // Static registry: filename → compiled Module
   private static moduleRegistry = new Map<string, WebAssembly.Module>();
 
+  private readonly isWorker: boolean;
+  private readonly isIsolated: boolean;
+  private readonly isSSR: boolean;
+
   public state = $state({
     url: '',
     isLoading: false,
@@ -32,25 +36,36 @@ export class WasiLoader {
     wasiModule: null as WasiModule | null,
     progressHistory: [] as number[],
 
-    get isReady() {
-      return !this.isLoading && this.error === null && !!this.wasiModule;
+    //Dynamic state variables(these shouldn't change value after finish loading linked wasm file
+		//(should save some cpu cycles once wasm loaded)
+    isReady = !this.isLoading && this.error === null && !!this.wasiModule;
+		exports = this.wasiModule?.exports ?? {};
+		
+    get memory() {
+      return this.wasiModule?.memory ?? null;
     },
+		
     get hasError() {
       return this.error !== null;
     },
-    get exports() {
-      return this.wasiModule?.exports ?? {};
-    },
-    get memory() {
-      return this.wasiModule?.memory ?? null;
-    }
 		
-    isWorker   = typeof self !== 'undefined'
+  });
+	
+	function isWasmReady() {
+		return !this.isLoading && this.error === null && !!this.wasiModule;
+	}
+	 
+	function getExports() {
+		return this.wasiModule?.exports ?? {};
+	}
+	
+  constructor() {
+    this.isWorker = typeof self !== 'undefined'
                  && typeof WorkerGlobalScope !== 'undefined'
                  && self instanceof WorkerGlobalScope;
-    isIsolated = typeof SharedArrayBuffer !== 'undefined';
-    isSSR      = typeof window === 'undefined';
-  });
+    this.isIsolated = typeof SharedArrayBuffer !== 'undefined';
+    this.isSSR      = typeof window === 'undefined';
+	}
 
   get url()             { return this.state.url; }
   get isLoading()       { return this.state.isLoading; }
@@ -348,7 +363,7 @@ export class WasiLoader {
    * Otherwise fetch, compile, cache, then instantiate.
    */
   public async loadWasm(key: string, url: string): Promise<boolean> {
-    reset();
+    this.reset();
     this.state.url = url;
     try {
       let module: WebAssembly.Module;
